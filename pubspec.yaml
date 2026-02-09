@@ -1,9 +1,9 @@
 name: genealogy_chart
 description: "A powerful Flutter package for rendering family trees and genealogy charts with pan, zoom, drag-drop, and beautiful pre-built node widgets."
-version: 1.0.0
-homepage: https://github.com/yourusername/genealogy_chart
-repository: https://github.com/yourusername/genealogy_chart
-issue_tracker: https://github.com/yourusername/genealogy_chart/issues
+version: 1.0.1
+homepage: https://github.com/jasonofua/genealogy-chart
+repository: https://github.com/jasonofua/genealogy-chart
+issue_tracker: https://github.com/jasonofua/genealogy-chart/issues
 
 topics:
   - family-tree
