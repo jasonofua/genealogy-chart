@@ -58,73 +58,181 @@ class FamilyTreeLayout extends LayoutAlgorithm<FamilyMember> {
   ) async {
     if (nodes.isEmpty) return {};
 
-    final positions = <String, Offset>{};
-
-    // Build relationship maps
-    final memberById = <String, FamilyMember>{};
+    // === Build lookup maps ===
     final nodeById = <String, GraphNode<FamilyMember>>{};
+    final memberById = <String, FamilyMember>{};
     for (final node in nodes) {
-      memberById[node.id] = node.data;
       nodeById[node.id] = node;
+      memberById[node.id] = node.data;
     }
 
-    // Group by generation, filtering by maxDepth
-    final generations = <int, List<GraphNode<FamilyMember>>>{};
+    // Build parent→children map (from member.parentIds)
+    final childrenOf = <String, List<String>>{};
     for (final node in nodes) {
-      final gen = node.data.generation;
-      generations.putIfAbsent(gen, () => []).add(node);
-    }
-
-    // Sort generations
-    final sortedGens = generations.keys.toList()..sort();
-
-    // Apply depth limit if configured
-    if (maxDepth != null && sortedGens.length > maxDepth!) {
-      final truncatedGens = sortedGens.take(maxDepth!).toList();
-      sortedGens
-        ..clear()
-        ..addAll(truncatedGens);
-    }
-
-    // Calculate positions for each generation
-    for (final gen in sortedGens) {
-      final genNodes = generations[gen]!;
-      final y = _getGenerationY(gen, sortedGens);
-
-      // Group spouses together
-      final positioned = <String>{};
-      var x = 0.0;
-
-      for (final node in genNodes) {
-        if (positioned.contains(node.id)) continue;
-
-        final member = node.data;
-        final spouseNodes = _getSpouseNodes(member, genNodes, positioned);
-
-        if (spouseNodes.isNotEmpty) {
-          // Position member and spouses together
-          positions[node.id] = Offset(x, y);
-          positioned.add(node.id);
-          x += node.size.width + spouseSpacing;
-
-          for (final spouse in spouseNodes) {
-            positions[spouse.id] = Offset(x, y);
-            positioned.add(spouse.id);
-            x += spouse.size.width + spouseSpacing;
+      for (final parentId in node.data.parentIds) {
+        if (nodeById.containsKey(parentId)) {
+          childrenOf.putIfAbsent(parentId, () => []);
+          if (!childrenOf[parentId]!.contains(node.id)) {
+            childrenOf[parentId]!.add(node.id);
           }
-
-          x += branchSpacing - spouseSpacing;
-        } else {
-          // Single node
-          positions[node.id] = Offset(x, y);
-          positioned.add(node.id);
-          x += node.size.width + siblingSpacing;
         }
       }
     }
 
-    // Center children under parents
-    _adjustChildrenPositions(positions, nodes, memberById);
+    // === Build spouse groups ===
+    // A spouse group is a primary member + co-located spouses.
+    final spouseGroupOf = <String, String>{}; // memberId → primaryId
+    final spouseGroups = <String, List<String>>{}; // primaryId → [members]
+    final claimed = <String>{};
+
+    for (final node in nodes) {
+      if (claimed.contains(node.id)) continue;
+      final group = <String>[node.id];
+      claimed.add(node.id);
+      for (final spouseId in node.data.spouseIds) {
+        if (!claimed.contains(spouseId) && nodeById.containsKey(spouseId)) {
+          group.add(spouseId);
+          claimed.add(spouseId);
+        }
+      }
+      spouseGroups[node.id] = group;
+      for (final id in group) {
+        spouseGroupOf[id] = node.id;
+      }
+    }
+
+    // === Collect child-groups for each spouse group ===
+    // Children of ANY member in the group are the group's children.
+    // Each child-group is assigned to exactly one parent-group.
+    final groupChildren = <String, List<String>>{}; // primaryId → child primaryIds
+    final childAssigned = <String>{};
+
+    for (final primaryId in spouseGroups.keys) {
+      final groupMemberIds = spouseGroups[primaryId]!;
+      final childGroupIds = <String>[];
+
+      for (final memberId in groupMemberIds) {
+        for (final childId in (childrenOf[memberId] ?? [])) {
+          final childGroupId = spouseGroupOf[childId];
+          if (childGroupId == null) continue;
+          if (childGroupId == primaryId) continue; // skip self
+          if (childAssigned.contains(childGroupId)) continue;
+          if (childGroupIds.contains(childGroupId)) continue;
+          childGroupIds.add(childGroupId);
+        }
+      }
+
+      if (childGroupIds.isNotEmpty) {
+        groupChildren[primaryId] = childGroupIds;
+        childAssigned.addAll(childGroupIds);
+      }
+    }
+
+    // === Find root groups (not claimed as a child of any group) ===
+    final rootGroups = <String>[];
+    for (final primaryId in spouseGroups.keys) {
+      if (!childAssigned.contains(primaryId)) {
+        rootGroups.add(primaryId);
+      }
+    }
+
+    // === Generation → Y mapping ===
+    final genSet = <int>{};
+    for (final node in nodes) {
+      genSet.add(node.data.generation);
+    }
+    final sortedGens = genSet.toList()..sort();
+    if (maxDepth != null && sortedGens.length > maxDepth!) {
+      sortedGens.removeRange(maxDepth!, sortedGens.length);
+    }
+
+    // === Calculate the width of just the spouse group (no children) ===
+    double getGroupWidth(String primaryId) {
+      final group = spouseGroups[primaryId]!;
+      double w = 0;
+      for (int i = 0; i < group.length; i++) {
+        w += nodeById[group[i]]!.size.width;
+        if (i < group.length - 1) w += spouseSpacing;
+      }
+      return w;
+    }
+
+    // === Bottom-up: calculate subtree width for each group ===
+    final subtreeWidths = <String, double>{};
+    final computing = <String>{}; // cycle guard
+
+    double calcSubtreeWidth(String primaryId) {
+      if (subtreeWidths.containsKey(primaryId)) {
+        return subtreeWidths[primaryId]!;
+      }
+      if (computing.contains(primaryId)) {
+        // Cycle detected — treat as leaf
+        final w = getGroupWidth(primaryId);
+        subtreeWidths[primaryId] = w;
+        return w;
+      }
+      computing.add(primaryId);
+
+      final groupWidth = getGroupWidth(primaryId);
+      final children = groupChildren[primaryId] ?? [];
+
+      if (children.isEmpty) {
+        subtreeWidths[primaryId] = groupWidth;
+        return groupWidth;
+      }
+
+      double childrenTotalWidth = 0;
+      for (int i = 0; i < children.length; i++) {
+        childrenTotalWidth += calcSubtreeWidth(children[i]);
+        if (i < children.length - 1) childrenTotalWidth += siblingSpacing;
+      }
+
+      final width =
+          childrenTotalWidth > groupWidth ? childrenTotalWidth : groupWidth;
+      subtreeWidths[primaryId] = width;
+      return width;
+    }
+
+    for (final rootId in rootGroups) {
+      calcSubtreeWidth(rootId);
+    }
+
+    // === Top-down: assign positions ===
+    final positions = <String, Offset>{};
+
+    void positionGroup(String primaryId, double leftX) {
+      final group = spouseGroups[primaryId]!;
+      final groupWidth = getGroupWidth(primaryId);
+      final subtreeWidth = subtreeWidths[primaryId] ?? groupWidth;
+
+      // Y from the generation of the first member in the group
+      final gen = memberById[group.first]!.generation;
+      final genIndex = sortedGens.indexOf(gen);
+      if (genIndex < 0) return; // beyond maxDepth
+      final y = genIndex * generationHeight;
+
+      // Center the spouse group within its allocated subtree width
+      final groupStartX = leftX + (subtreeWidth - groupWidth) / 2;
+      double x = groupStartX;
+      for (final memberId in group) {
+        positions[memberId] = Offset(x, y);
+        x += nodeById[memberId]!.size.width + spouseSpacing;
+      }
+
+      // Position child groups left-to-right within this subtree's allocation
+      final children = groupChildren[primaryId] ?? [];
+      double childX = leftX;
+      for (final childGroupId in children) {
+        positionGroup(childGroupId, childX);
+        childX += (subtreeWidths[childGroupId] ?? 0) + siblingSpacing;
+      }
+    }
+
+    double rootX = 0;
+    for (final rootId in rootGroups) {
+      positionGroup(rootId, rootX);
+      rootX += (subtreeWidths[rootId] ?? 0) + branchSpacing;
+    }
 
     // Center tree on canvas
     if (centerOnRoot) {
@@ -135,129 +243,6 @@ class FamilyTreeLayout extends LayoutAlgorithm<FamilyMember> {
     _applyPadding(positions);
 
     return positions;
-  }
-
-  double _getGenerationY(int generation, List<int> sortedGens) {
-    final genIndex = sortedGens.indexOf(generation);
-    return genIndex * generationHeight;
-  }
-
-  List<GraphNode<FamilyMember>> _getSpouseNodes(
-    FamilyMember member,
-    List<GraphNode<FamilyMember>> genNodes,
-    Set<String> positioned,
-  ) {
-    final spouses = <GraphNode<FamilyMember>>[];
-
-    for (final spouseId in member.spouseIds) {
-      if (positioned.contains(spouseId)) continue;
-
-      final spouseNode = genNodes.firstWhere(
-        (n) => n.id == spouseId,
-        orElse: () => genNodes.first,
-      );
-      if (spouseNode.id == spouseId) {
-        spouses.add(spouseNode);
-      }
-    }
-
-    return spouses;
-  }
-
-  void _adjustChildrenPositions(
-    Map<String, Offset> positions,
-    List<GraphNode<FamilyMember>> nodes,
-    Map<String, FamilyMember> memberById,
-  ) {
-    // Build parent-children map
-    final childrenByParent = <String, List<String>>{};
-    for (final node in nodes) {
-      final member = node.data;
-      for (final parentId in member.parentIds) {
-        childrenByParent.putIfAbsent(parentId, () => []).add(node.id);
-      }
-    }
-
-    // Process from bottom generations up
-    final processedParents = <String>{};
-
-    void centerParentOverChildren(String parentId) {
-      if (processedParents.contains(parentId)) return;
-      processedParents.add(parentId);
-
-      final childIds = childrenByParent[parentId];
-      if (childIds == null || childIds.isEmpty) return;
-
-      // Get parent position
-      final parentPos = positions[parentId];
-      if (parentPos == null) return;
-
-      // Calculate children's center X
-      double minX = double.infinity;
-      double maxX = double.negativeInfinity;
-
-      for (final childId in childIds) {
-        final childPos = positions[childId];
-        if (childPos == null) continue;
-
-        final childNode = nodes.firstWhere(
-          (n) => n.id == childId,
-          orElse: () => nodes.first,
-        );
-        if (childNode.id == childId) {
-          minX = minX < childPos.dx ? minX : childPos.dx;
-          maxX = maxX > childPos.dx + childNode.size.width
-              ? maxX
-              : childPos.dx + childNode.size.width;
-        }
-      }
-
-      if (minX == double.infinity) return;
-
-      // Get parent's spouse(s) to center the couple over children
-      final parent = memberById[parentId];
-      if (parent == null) return;
-
-      final allSpouseIds = [parentId, ...parent.spouseIds];
-      double parentMinX = double.infinity;
-      double parentMaxX = double.negativeInfinity;
-
-      for (final id in allSpouseIds) {
-        final pos = positions[id];
-        if (pos == null) continue;
-
-        final node = nodes.firstWhere(
-          (n) => n.id == id,
-          orElse: () => nodes.first,
-        );
-        if (node.id == id) {
-          parentMinX = parentMinX < pos.dx ? parentMinX : pos.dx;
-          parentMaxX = parentMaxX > pos.dx + node.size.width
-              ? parentMaxX
-              : pos.dx + node.size.width;
-        }
-      }
-
-      if (parentMinX == double.infinity) return;
-
-      // Calculate offset to center
-      final childrenCenter = (minX + maxX) / 2;
-      final parentsCenter = (parentMinX + parentMaxX) / 2;
-      final offset = childrenCenter - parentsCenter;
-
-      // Move all parent spouses
-      for (final id in allSpouseIds) {
-        final pos = positions[id];
-        if (pos != null) {
-          positions[id] = Offset(pos.dx + offset, pos.dy);
-        }
-      }
-    }
-
-    // Center all parents over their children
-    for (final parentId in childrenByParent.keys) {
-      centerParentOverChildren(parentId);
-    }
   }
 
   void _centerOnCanvas(
@@ -340,14 +325,20 @@ class FamilyTreeLayout extends LayoutAlgorithm<FamilyMember> {
       List<Offset> points;
 
       if (edge.type == EdgeType.spouse) {
-        // Horizontal line between spouses
-        final sourceRight = sourcePos.dx + sourceSize.width;
-        final targetLeft = targetPos.dx;
-        final y = sourcePos.dy + sourceSize.height / 2;
+        // Horizontal line between spouses — always draw from left node's
+        // right edge to right node's left edge, regardless of source/target
+        // ordering in the edge data.
+        final bool sourceIsLeft = sourcePos.dx <= targetPos.dx;
+        final leftPos = sourceIsLeft ? sourcePos : targetPos;
+        final rightPos = sourceIsLeft ? targetPos : sourcePos;
+        final leftSize = sourceIsLeft ? sourceSize : targetSize;
+        final leftRight = leftPos.dx + leftSize.width;
+        final rightLeft = rightPos.dx;
+        final y = leftPos.dy + leftSize.height / 2;
 
         points = [
-          Offset(sourceRight, y),
-          Offset(targetLeft, y),
+          Offset(leftRight, y),
+          Offset(rightLeft, y),
         ];
       } else if (edge.type == EdgeType.parentChild) {
         // Orthogonal line from parent to child

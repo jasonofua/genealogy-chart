@@ -202,13 +202,54 @@ class OrthogonalEdgePainter extends EdgePainter {
         path.lineTo(curr.dx, curr.dy);
       }
 
-      canvas.drawPath(path, paint);
+      // Apply dashed/dotted style if needed
+      if (theme.lineStyle == EdgeLineStyle.dashed) {
+        _drawDashedPath(canvas, path, paint);
+      } else if (theme.lineStyle == EdgeLineStyle.dotted) {
+        _drawDottedPath(canvas, path, paint);
+      } else {
+        canvas.drawPath(path, paint);
+      }
 
       if (edgePath.showArrow && points.length >= 2) {
         final lastPoint = points.last;
         final secondLast = points[points.length - 2];
         final direction = lastPoint - secondLast;
         drawArrow(canvas, lastPoint, direction, paint);
+      }
+    }
+  }
+
+  void _drawDashedPath(Canvas canvas, Path path, Paint paint) {
+    const dashLength = 8.0;
+    const gapLength = 4.0;
+
+    final metrics = path.computeMetrics();
+    for (final metric in metrics) {
+      double distance = 0;
+      while (distance < metric.length) {
+        final extractedPath = metric.extractPath(
+          distance,
+          (distance + dashLength).clamp(0, metric.length),
+        );
+        canvas.drawPath(extractedPath, paint);
+        distance += dashLength + gapLength;
+      }
+    }
+  }
+
+  void _drawDottedPath(Canvas canvas, Path path, Paint paint) {
+    const dotSpacing = 6.0;
+
+    final metrics = path.computeMetrics();
+    for (final metric in metrics) {
+      double distance = 0;
+      while (distance < metric.length) {
+        final tangent = metric.getTangentForOffset(distance);
+        if (tangent != null) {
+          canvas.drawCircle(tangent.position, paint.strokeWidth / 2, paint);
+        }
+        distance += dotSpacing;
       }
     }
   }
@@ -245,7 +286,14 @@ class CurvedEdgePainter extends EdgePainter {
 
       path.cubicTo(cp1.dx, cp1.dy, cp2.dx, cp2.dy, end.dx, end.dy);
 
-      canvas.drawPath(path, paint);
+      // Apply dashed/dotted style if needed
+      if (theme.lineStyle == EdgeLineStyle.dashed) {
+        _drawDashedPath(canvas, path, paint);
+      } else if (theme.lineStyle == EdgeLineStyle.dotted) {
+        _drawDottedPath(canvas, path, paint);
+      } else {
+        canvas.drawPath(path, paint);
+      }
 
       if (edgePath.showArrow) {
         // Direction at end of bezier
@@ -258,6 +306,40 @@ class CurvedEdgePainter extends EdgePainter {
               3 * 1 * 1 * (end.dy - cp2.dy),
         );
         drawArrow(canvas, end, direction, paint);
+      }
+    }
+  }
+
+  void _drawDashedPath(Canvas canvas, Path path, Paint paint) {
+    const dashLength = 8.0;
+    const gapLength = 4.0;
+
+    final metrics = path.computeMetrics();
+    for (final metric in metrics) {
+      double distance = 0;
+      while (distance < metric.length) {
+        final extractedPath = metric.extractPath(
+          distance,
+          (distance + dashLength).clamp(0, metric.length),
+        );
+        canvas.drawPath(extractedPath, paint);
+        distance += dashLength + gapLength;
+      }
+    }
+  }
+
+  void _drawDottedPath(Canvas canvas, Path path, Paint paint) {
+    const dotSpacing = 6.0;
+
+    final metrics = path.computeMetrics();
+    for (final metric in metrics) {
+      double distance = 0;
+      while (distance < metric.length) {
+        final tangent = metric.getTangentForOffset(distance);
+        if (tangent != null) {
+          canvas.drawCircle(tangent.position, paint.strokeWidth / 2, paint);
+        }
+        distance += dotSpacing;
       }
     }
   }

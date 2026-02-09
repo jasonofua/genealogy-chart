@@ -179,7 +179,7 @@ abstract class LayoutAlgorithm<T> {
     return paths;
   }
 
-  /// Calculate connection points between nodes.
+  /// Calculate orthogonal connection points between nodes.
   List<Offset> _calculateConnectionPoints(
     Offset sourceCenter,
     Offset targetCenter,
@@ -189,24 +189,44 @@ abstract class LayoutAlgorithm<T> {
   ) {
     switch (configuration.orientation) {
       case TreeOrientation.topToBottom:
+        final sourceBottom = Offset(sourceCenter.dx, sourceCenter.dy + sourceSize.height / 2);
+        final targetTop = Offset(targetCenter.dx, targetCenter.dy - targetSize.height / 2);
+        final midY = (sourceBottom.dy + targetTop.dy) / 2;
         return [
-          Offset(sourceCenter.dx, sourceCenter.dy + sourceSize.height / 2),
-          Offset(targetCenter.dx, targetCenter.dy - targetSize.height / 2),
+          sourceBottom,
+          Offset(sourceCenter.dx, midY),
+          Offset(targetCenter.dx, midY),
+          targetTop,
         ];
       case TreeOrientation.bottomToTop:
+        final sourceTop = Offset(sourceCenter.dx, sourceCenter.dy - sourceSize.height / 2);
+        final targetBottom = Offset(targetCenter.dx, targetCenter.dy + targetSize.height / 2);
+        final midY = (sourceTop.dy + targetBottom.dy) / 2;
         return [
-          Offset(sourceCenter.dx, sourceCenter.dy - sourceSize.height / 2),
-          Offset(targetCenter.dx, targetCenter.dy + targetSize.height / 2),
+          sourceTop,
+          Offset(sourceCenter.dx, midY),
+          Offset(targetCenter.dx, midY),
+          targetBottom,
         ];
       case TreeOrientation.leftToRight:
+        final sourceRight = Offset(sourceCenter.dx + sourceSize.width / 2, sourceCenter.dy);
+        final targetLeft = Offset(targetCenter.dx - targetSize.width / 2, targetCenter.dy);
+        final midX = (sourceRight.dx + targetLeft.dx) / 2;
         return [
-          Offset(sourceCenter.dx + sourceSize.width / 2, sourceCenter.dy),
-          Offset(targetCenter.dx - targetSize.width / 2, targetCenter.dy),
+          sourceRight,
+          Offset(midX, sourceCenter.dy),
+          Offset(midX, targetCenter.dy),
+          targetLeft,
         ];
       case TreeOrientation.rightToLeft:
+        final sourceLeft = Offset(sourceCenter.dx - sourceSize.width / 2, sourceCenter.dy);
+        final targetRight = Offset(targetCenter.dx + targetSize.width / 2, targetCenter.dy);
+        final midX = (sourceLeft.dx + targetRight.dx) / 2;
         return [
-          Offset(sourceCenter.dx - sourceSize.width / 2, sourceCenter.dy),
-          Offset(targetCenter.dx + targetSize.width / 2, targetCenter.dy),
+          sourceLeft,
+          Offset(midX, sourceCenter.dy),
+          Offset(midX, targetCenter.dy),
+          targetRight,
         ];
     }
   }
@@ -307,10 +327,25 @@ class TreeLayout<T> extends LayoutAlgorithm<T> {
     final isVertical = configuration.orientation == TreeOrientation.topToBottom ||
         configuration.orientation == TreeOrientation.bottomToTop;
 
+    // Calculate cumulative level offsets accounting for node sizes
+    final sortedLevels = levels.keys.toList()..sort();
+    final levelOffsets = <int, double>{};
+    double accumulated = 0;
+    for (final level in sortedLevels) {
+      levelOffsets[level] = accumulated;
+      final levelNodes = levels[level]!;
+      double maxSize = 0;
+      for (final node in levelNodes) {
+        final s = isVertical ? node.size.height : node.size.width;
+        if (s > maxSize) maxSize = s;
+      }
+      accumulated += maxSize + configuration.levelSpacing;
+    }
+
     for (final entry in levels.entries) {
       final level = entry.key;
       final levelNodes = entry.value;
-      final levelOffset = level * configuration.levelSpacing;
+      final levelOffset = levelOffsets[level] ?? 0.0;
 
       for (int i = 0; i < levelNodes.length; i++) {
         final node = levelNodes[i];
@@ -322,10 +357,11 @@ class TreeLayout<T> extends LayoutAlgorithm<T> {
               : canvasSize.height - levelOffset - node.size.height;
           positions[node.id] = Offset(nodeOffset, y);
         } else {
+          final nodeOffsetV = i * (node.size.height + configuration.nodeSpacing);
           final x = configuration.orientation == TreeOrientation.leftToRight
               ? levelOffset
               : canvasSize.width - levelOffset - node.size.width;
-          positions[node.id] = Offset(x, nodeOffset);
+          positions[node.id] = Offset(x, nodeOffsetV);
         }
       }
     }

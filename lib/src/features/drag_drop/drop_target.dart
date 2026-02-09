@@ -186,18 +186,18 @@ class _NodeDropTargetState extends State<NodeDropTarget> {
       return widget.allowedRelations.first;
     }
 
-    // Default logic based on generations
+    // Default logic: dropping on another member reparents the dragged node
+    // as a child of the target. Same-generation drops become siblings,
+    // and spouse relations require explicit single-relation targets.
     if (widget.member != null) {
       final targetGen = widget.member!.generation;
       final draggedGen = dragged.generation;
 
-      if (draggedGen > targetGen) {
-        return DropRelation.asChild;
-      } else if (draggedGen < targetGen) {
-        return DropRelation.asParent;
-      } else {
+      if (draggedGen == targetGen) {
         return DropRelation.asSibling;
       }
+      // Any cross-generation drop reparents dragged as child of target
+      return DropRelation.asChild;
     }
 
     return DropRelation.reposition;

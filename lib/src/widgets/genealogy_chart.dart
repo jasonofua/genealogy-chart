@@ -180,6 +180,7 @@ class _GenealogyChartState<T> extends State<GenealogyChart<T>> {
   Map<String, Offset> _positions = {};
   Map<String, Size> _nodeSizes = {};
   bool _isLayoutComputed = false;
+  bool _isDragging = false;
 
   @override
   void initState() {
@@ -236,6 +237,10 @@ class _GenealogyChartState<T> extends State<GenealogyChart<T>> {
 
     // Build edges from relationships
     final edges = <GraphEdge>[];
+    final memberSet = <String>{};
+    for (final m in members) {
+      memberSet.add(m.id);
+    }
     for (final member in members) {
       // Parent-child edges
       for (final parentId in member.parentIds) {
@@ -245,17 +250,27 @@ class _GenealogyChartState<T> extends State<GenealogyChart<T>> {
           type: EdgeType.parentChild,
         ));
       }
+    }
 
-      // Spouse edges
+    // Spouse edges: connect adjacent members in spouse groups
+    final spouseClaimed = <String>{};
+    for (final member in members) {
+      if (spouseClaimed.contains(member.id)) continue;
+      final group = <String>[member.id];
+      spouseClaimed.add(member.id);
       for (final spouseId in member.spouseIds) {
-        // Only add edge once (avoid duplicates)
-        if (member.id.compareTo(spouseId) < 0) {
-          edges.add(GraphEdge(
-            sourceId: member.id,
-            targetId: spouseId,
-            type: EdgeType.spouse,
-          ));
+        if (!spouseClaimed.contains(spouseId) &&
+            memberSet.contains(spouseId)) {
+          group.add(spouseId);
+          spouseClaimed.add(spouseId);
         }
+      }
+      for (int i = 0; i < group.length - 1; i++) {
+        edges.add(GraphEdge(
+          sourceId: group[i],
+          targetId: group[i + 1],
+          type: EdgeType.spouse,
+        ));
       }
     }
 
@@ -377,7 +392,7 @@ class _GenealogyChartState<T> extends State<GenealogyChart<T>> {
             boundaryMargin: widget.boundaryMargin,
             minScale: widget.minScale,
             maxScale: widget.maxScale,
-            panEnabled: widget.enablePan,
+            panEnabled: widget.enablePan && !_isDragging,
             scaleEnabled: widget.enableZoom,
             child: SizedBox(
               width: _getContentWidth(),
@@ -442,7 +457,14 @@ class _GenealogyChartState<T> extends State<GenealogyChart<T>> {
     final edges = <GraphEdge>[];
 
     if (widget._isFamilyMode && widget.familyMembers != null) {
-      for (final member in widget.familyMembers!) {
+      final members = widget.familyMembers!;
+      final memberSet = <String>{};
+      for (final m in members) {
+        memberSet.add(m.id);
+      }
+
+      // Parent-child edges
+      for (final member in members) {
         for (final parentId in member.parentIds) {
           edges.add(GraphEdge(
             sourceId: parentId,
@@ -450,14 +472,29 @@ class _GenealogyChartState<T> extends State<GenealogyChart<T>> {
             type: EdgeType.parentChild,
           ));
         }
+      }
+
+      // Spouse edges: build groups of adjacent spouses and connect
+      // consecutive members so lines don't pass through intermediate nodes.
+      final spouseClaimed = <String>{};
+      for (final member in members) {
+        if (spouseClaimed.contains(member.id)) continue;
+        final group = <String>[member.id];
+        spouseClaimed.add(member.id);
         for (final spouseId in member.spouseIds) {
-          if (member.id.compareTo(spouseId) < 0) {
-            edges.add(GraphEdge(
-              sourceId: member.id,
-              targetId: spouseId,
-              type: EdgeType.spouse,
-            ));
+          if (!spouseClaimed.contains(spouseId) &&
+              memberSet.contains(spouseId)) {
+            group.add(spouseId);
+            spouseClaimed.add(spouseId);
           }
+        }
+        // Connect consecutive members in the group
+        for (int i = 0; i < group.length - 1; i++) {
+          edges.add(GraphEdge(
+            sourceId: group[i],
+            targetId: group[i + 1],
+            type: EdgeType.spouse,
+          ));
         }
       }
     } else if (widget.graphData != null) {
@@ -567,6 +604,8 @@ class _GenealogyChartState<T> extends State<GenealogyChart<T>> {
               // Handle positioning separately
               break;
           }
+          // Recompute layout so positions update immediately after drop
+          _computeLayout();
         }
       },
       style: dnd.DropTargetStyle(
@@ -577,7 +616,14 @@ class _GenealogyChartState<T> extends State<GenealogyChart<T>> {
         member: member,
         enabled: true,
         onDragStarted: () {
+          setState(() => _isDragging = true);
           _effectiveController.selectNode(member.id);
+        },
+        onDragEnd: (_) {
+          setState(() => _isDragging = false);
+        },
+        onDraggableCanceled: (_, __) {
+          setState(() => _isDragging = false);
         },
         child: child,
       ),
